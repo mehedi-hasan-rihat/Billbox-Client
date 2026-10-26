@@ -1,5 +1,6 @@
 import { Receipt } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
+import { cn } from "cn";
 
 const navLinks = [
   { label: "Problem", href: "#problem" },
@@ -14,7 +15,7 @@ const navLinks = [
 export function Navbar() {
   return (
     <nav className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md">
-      <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+      <div className="mx-auto flex h-12 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <div className="flex items-center gap-8">
           <div className="flex items-center gap-2.5">
             <Receipt className="size-5 text-foreground" />
@@ -35,19 +36,18 @@ export function Navbar() {
           </div>
         </div>
         <div className="flex items-center gap-0">
-          <Button
-            size="sm"
-            className="rounded-r-none font-mono text-[11px] font-semibold tracking-[0.08em]"
+          <a
+            href="/register"
+            className={cn(buttonVariants(), "rounded-r-none font-mono text-[11px] font-semibold tracking-[0.08em] cursor-pointer px-4")}
           >
             Get started
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="rounded-l-none border-l-0 font-mono text-[11px] font-medium tracking-[0.08em]"
+          </a>
+          <a
+            href="/login"
+            className={cn(buttonVariants({ variant: "outline" }), "rounded-l-none border-l-0 font-mono text-[11px] font-medium tracking-[0.08em] cursor-pointer px-4")}
           >
             LOGIN
-          </Button>
+          </a>
         </div>
       </div>
     </nav>
