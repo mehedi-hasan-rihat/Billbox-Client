@@ -14,7 +14,7 @@ export type AuthFormState =
     }
   | undefined;
 
-/** Generic form state for non-auth forms (bills, billers, recurring). */
+/** Generic form state for non-auth forms (bills, contacts, recurring). */
 export type FormState = {
   errors?: Record<string, string[]>;
   message?: string;
@@ -43,6 +43,7 @@ export type PaymentMethod = "CASH" | "BKASH" | "NAGAD" | "BANK" | "CARD" | "OTHE
 export type BillStatus =
   | "INBOX"
   | "UNPAID"
+  | "PARTIALLY_PAID"
   | "PAID"
   | "UPCOMING"
   | "DUE_TODAY"
@@ -55,6 +56,8 @@ export type BillSource = "MANUAL" | "INBOX";
 
 export type BillType = "ONE_TIME" | "RECURRING";
 
+export type BillDirection = "OUTGOING" | "INCOMING";
+
 export type RecurringStatus = "ACTIVE" | "PAUSED" | "STOPPED";
 
 export type RecurringFrequency = "MONTHLY" | "WEEKLY" | "YEARLY";
@@ -64,17 +67,21 @@ export type BillEventType =
   | "SENT"
   | "RECEIVED"
   | "CONFIRMED"
-  | "PAID"
+  | "PAYMENT_ADDED"
+  | "FULLY_PAID"
+  | "PAYMENT_UPDATED"
+  | "PAYMENT_DELETED"
   | "EDITED"
   | "NOTE_ADDED"
-  | "PAYMENT_UPDATED"
+  | "NOTE_UPDATED"
+  | "NOTE_DELETED"
   | "RECURRING_GENERATED";
 
 // ---------------------------------------------------------------------------
 // Domain Models
 // ---------------------------------------------------------------------------
 
-export interface Biller {
+export interface Contact {
   id: string;
   userId: string;
   name: string;
@@ -86,30 +93,42 @@ export interface Biller {
   updatedAt: string;
 }
 
+/** A single payment record on a bill. */
+export interface Payment {
+  id: string;
+  billId: string;
+  amount: string;
+  paidOn: string;
+  paymentMethod: PaymentMethod | null;
+  paymentReference: string | null;
+  note: string | null;
+  createdAt: string;
+}
+
 export interface Bill {
   id: string;
   userId: string;
   source: BillSource;
   type: BillType;
+  direction: BillDirection;
   name: string;
   category: BillCategory;
   amount: string;
-  billDate: string | null;
+  issueDate: string | null;
   dueDate: string | null;
-  note: string | null;
-  senderBillerId: string | null;
-  senderBiller: Biller | null;
+  notes: string[];
+  contactId: string | null;
+  contact: Contact | null;
   recurringRuleId: string | null;
   status: BillStatus;
-  paidAt: string | null;
-  paidAmount: string | null;
-  paymentMethod: PaymentMethod | null;
-  paymentReference: string | null;
+  totalPaid: string;
+  remaining: string;
+  payments: Payment[];
   createdAt: string;
   updatedAt: string;
 }
 
-export interface BillerLookupResult {
+export interface ContactLookupResult {
   id: string;
   billBoxId: string;
   name: string;
@@ -123,8 +142,8 @@ export interface RecurringRule {
   category: BillCategory;
   amount: string;
   note: string | null;
-  senderBillerId: string | null;
-  senderBiller?: Biller | null;
+  contactId: string | null;
+  contact?: Contact | null;
   frequency: RecurringFrequency;
   dayRule: string;
   generateDaysBefore: number;
@@ -176,17 +195,20 @@ export interface PaginatedResponse<T> {
 // Query Params
 // ---------------------------------------------------------------------------
 
+export type BillSortField = "issueDate" | "dueDate" | "amount" | "createdAt";
+
 export interface BillListParams {
   search?: string;
   category?: BillCategory;
   source?: BillSource;
   type?: BillType;
+  direction?: BillDirection;
   status?: BillStatusFilter;
-  billDateFrom?: string;
-  billDateTo?: string;
+  issueDateFrom?: string;
+  issueDateTo?: string;
   dueDateFrom?: string;
   dueDateTo?: string;
-  sort?: "billDate" | "dueDate" | "amount" | "createdAt";
+  sort?: BillSortField;
   order?: "asc" | "desc";
   page?: number;
   limit?: number;
@@ -227,45 +249,44 @@ export interface CreateBillBody {
   name: string;
   category: BillCategory;
   amount: string;
-  billDate?: string;
+  issueDate?: string;
   dueDate?: string;
   note?: string;
-  senderBillerId?: string;
-  status?: "UNPAID" | "PAID";
-  paidAt?: string;
-  paidAmount?: string;
-  paymentMethod?: PaymentMethod;
-  paymentReference?: string;
+  contactId?: string;
+  direction?: BillDirection;
 }
 
 export interface EditBillBody {
   name?: string;
   category?: BillCategory;
   amount?: string;
-  billDate?: string;
+  issueDate?: string;
   dueDate?: string;
-  senderBillerId?: string | null;
+  contactId?: string | null;
+  direction?: BillDirection;
 }
 
-export interface PayBillBody {
-  paidAt: string;
-  paidAmount?: string;
+export interface AddPaymentBody {
+  amount: string;
+  paidOn: string;
   paymentMethod?: PaymentMethod;
   paymentReference?: string;
+  note?: string;
 }
 
 export interface UpdatePaymentBody {
-  paidAt?: string;
-  paidAmount?: string;
+  amount?: string;
+  paidOn?: string;
   paymentMethod?: PaymentMethod;
   paymentReference?: string;
+  note?: string;
 }
 
 // ---------------------------------------------------------------------------
-// Biller Request Bodies
+// Contact Request Bodies
 // ---------------------------------------------------------------------------
 
-export interface CreateBillerBody {
+export interface CreateContactBody {
   name: string;
   phone?: string;
   email?: string;
@@ -273,7 +294,7 @@ export interface CreateBillerBody {
   billBoxId?: string;
 }
 
-export interface EditBillerBody {
+export interface EditContactBody {
   name?: string;
   phone?: string;
   email?: string;
@@ -290,7 +311,7 @@ export interface CreateRecurringBody {
   category: BillCategory;
   amount: string;
   note?: string;
-  senderBillerId?: string;
+  contactId?: string;
   frequency: RecurringFrequency;
   dayRule: string;
   generateDaysBefore?: number;
@@ -303,7 +324,7 @@ export interface EditRecurringBody {
   category?: BillCategory;
   amount?: string;
   note?: string;
-  senderBillerId?: string | null;
+  contactId?: string | null;
   dayRule?: string;
   generateDaysBefore?: number;
   endsAt?: string | null;

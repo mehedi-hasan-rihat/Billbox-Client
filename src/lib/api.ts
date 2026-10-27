@@ -7,18 +7,19 @@ import type {
   RegisterBody,
   LoginBody,
   Bill,
-  Biller,
-  BillerLookupResult,
+  Contact,
+  ContactLookupResult,
+  Payment,
   RecurringRule,
   BillTimelineEvent,
   PaginatedResponse,
   BillListParams,
   CreateBillBody,
   EditBillBody,
-  PayBillBody,
+  AddPaymentBody,
   UpdatePaymentBody,
-  CreateBillerBody,
-  EditBillerBody,
+  CreateContactBody,
+  EditContactBody,
   CreateRecurringBody,
   EditRecurringBody,
 } from "@/lib/definitions";
@@ -50,36 +51,21 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 /**
- * Authenticated request — reads session, injects Bearer token.
- * Use for all protected endpoints (bills, billers, recurring).
+ * Authenticated request — reads session cookie, injects Bearer token.
+ * Always no-store: user-specific data must never be shared across users.
  */
 async function authedRequest<T>(path: string, options?: RequestInit): Promise<T> {
   const session = await getSession();
   if (!session) throw new ApiError(401, "Not authenticated");
 
   return request<T>(path, {
-    cache: "no-store",
     ...options,
+    cache: "no-store",
     headers: {
+      "Content-Type": "application/json",
       Authorization: `Bearer ${session.accessToken}`,
       ...(options?.headers ?? {}),
     },
-  });
-}
-
-/**
- * Authenticated GET with caching (tag-based revalidation).
- */
-async function authedCachedRequest<T>(
-  path: string,
-  tags: string[],
-): Promise<T> {
-  const session = await getSession();
-  if (!session) throw new ApiError(401, "Not authenticated");
-
-  return request<T>(path, {
-    next: { tags },
-    headers: { Authorization: `Bearer ${session.accessToken}` },
   });
 }
 
@@ -92,6 +78,10 @@ function qs(params?: Record<string, string | number | undefined | null>): string
   if (!entries.length) return "";
   return "?" + entries.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`).join("&");
 }
+
+// ---------------------------------------------------------------------------
+// Auth (public — no session needed)
+// ---------------------------------------------------------------------------
 
 export const authApi = {
   register(body: RegisterBody) {
@@ -110,8 +100,8 @@ export const authApi = {
 
   me(token: string) {
     return request<AuthUser>("/auth/me", {
+      cache: "no-store",
       headers: { Authorization: `Bearer ${token}` },
-      next: { tags: ["auth-me"] },
     });
   },
 };
@@ -132,18 +122,15 @@ export const billsApi = {
   /** GET /bills — list with search/filter/sort/pagination. */
   list(params?: BillListParams) {
     const query = qs(params as Record<string, string | number | undefined> | undefined);
-    return authedCachedRequest<PaginatedResponse<Bill>>(
-      `/bills${query}`,
-      ["bills"],
-    );
+    return authedRequest<PaginatedResponse<Bill>>(`/bills${query}`);
   },
 
   /** GET /bills/:id — single bill. */
   get(id: string) {
-    return authedCachedRequest<Bill>(`/bills/${id}`, ["bills"]);
+    return authedRequest<Bill>(`/bills/${id}`);
   },
 
-  /** PATCH /bills/:id — edit bill details (no status transitions). */
+  /** PATCH /bills/:id — edit bill details. */
   edit(id: string, body: EditBillBody) {
     return authedRequest<Bill>(`/bills/${id}`, {
       method: "PATCH",
@@ -153,78 +140,100 @@ export const billsApi = {
 
   /** GET /bills/:id/timeline — full event history. */
   timeline(id: string) {
-    return authedCachedRequest<BillTimelineEvent[]>(`/bills/${id}/timeline`, [
-      "bills",
-    ]);
+    return authedRequest<BillTimelineEvent[]>(`/bills/${id}/timeline`);
   },
 
-  /** POST /bills/:id/pay — mark UNPAID → PAID. */
-  pay(id: string, body: PayBillBody) {
-    return authedRequest<Bill>(`/bills/${id}/pay`, {
+  /** POST /bills/:id/payments — add a payment. */
+  addPayment(id: string, body: AddPaymentBody) {
+    return authedRequest<Bill>(`/bills/${id}/payments`, {
       method: "POST",
       body: JSON.stringify(body),
     });
   },
 
-  /** PATCH /bills/:id/payment — update payment metadata on PAID bill. */
-  updatePayment(id: string, body: UpdatePaymentBody) {
-    return authedRequest<Bill>(`/bills/${id}/payment`, {
+  /** GET /bills/:id/payments — list all payments. */
+  getPayments(id: string) {
+    return authedRequest<Payment[]>(`/bills/${id}/payments`);
+  },
+
+  /** PATCH /bills/:id/payments/:paymentId — update a payment. */
+  updatePayment(id: string, paymentId: string, body: UpdatePaymentBody) {
+    return authedRequest<Bill>(`/bills/${id}/payments/${paymentId}`, {
       method: "PATCH",
       body: JSON.stringify(body),
     });
   },
 
-  /** PATCH /bills/:id/notes — add/update/remove note. */
-  updateNotes(id: string, note: string | null) {
+  /** DELETE /bills/:id/payments/:paymentId — delete a payment. */
+  deletePayment(id: string, paymentId: string) {
+    return authedRequest<Bill>(`/bills/${id}/payments/${paymentId}`, {
+      method: "DELETE",
+    });
+  },
+
+  /** POST /bills/:id/notes — append a note. */
+  addNote(id: string, note: string) {
     return authedRequest<Bill>(`/bills/${id}/notes`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    });
+  },
+
+  /** PATCH /bills/:id/notes/:noteIndex — update a note by index. */
+  updateNote(id: string, noteIndex: number, note: string) {
+    return authedRequest<Bill>(`/bills/${id}/notes/${noteIndex}`, {
       method: "PATCH",
       body: JSON.stringify({ note }),
+    });
+  },
+
+  /** DELETE /bills/:id/notes/:noteIndex — delete a note by index. */
+  deleteNote(id: string, noteIndex: number) {
+    return authedRequest<Bill>(`/bills/${id}/notes/${noteIndex}`, {
+      method: "DELETE",
     });
   },
 };
 
 // ---------------------------------------------------------------------------
-// Billers
+// Contacts
 // ---------------------------------------------------------------------------
 
-export const billersApi = {
-  /** GET /billers/lookup?billBoxId= — look up a BillBox user. */
+export const contactsApi = {
+  /** GET /contacts/lookup?billBoxId= — look up a BillBox user. */
   lookup(billBoxId: string) {
-    return authedCachedRequest<BillerLookupResult>(
-      `/billers/lookup${qs({ billBoxId })}`,
-      ["billers-lookup"],
-    );
+    return authedRequest<ContactLookupResult>(`/contacts/lookup${qs({ billBoxId })}`);
   },
 
-  /** POST /billers — create a biller. */
-  create(body: CreateBillerBody) {
-    return authedRequest<Biller>("/billers", {
+  /** POST /contacts — create a contact. */
+  create(body: CreateContactBody) {
+    return authedRequest<Contact>("/contacts", {
       method: "POST",
       body: JSON.stringify(body),
     });
   },
 
-  /** GET /billers — list all billers (sorted by name). */
+  /** GET /contacts — list all contacts. */
   list() {
-    return authedCachedRequest<Biller[]>("/billers", ["billers"]);
+    return authedRequest<Contact[]>("/contacts");
   },
 
-  /** GET /billers/:id — single biller. */
+  /** GET /contacts/:id — single contact. */
   get(id: string) {
-    return authedCachedRequest<Biller>(`/billers/${id}`, ["billers"]);
+    return authedRequest<Contact>(`/contacts/${id}`);
   },
 
-  /** PATCH /billers/:id — edit a biller. */
-  edit(id: string, body: EditBillerBody) {
-    return authedRequest<Biller>(`/billers/${id}`, {
+  /** PATCH /contacts/:id — edit a contact. */
+  edit(id: string, body: EditContactBody) {
+    return authedRequest<Contact>(`/contacts/${id}`, {
       method: "PATCH",
       body: JSON.stringify(body),
     });
   },
 
-  /** DELETE /billers/:id — soft-delete a biller. */
+  /** DELETE /contacts/:id — delete a contact. */
   delete(id: string) {
-    return authedRequest<{ deleted: boolean }>(`/billers/${id}`, {
+    return authedRequest<{ deleted: boolean }>(`/contacts/${id}`, {
       method: "DELETE",
     });
   },
@@ -235,7 +244,7 @@ export const billersApi = {
 // ---------------------------------------------------------------------------
 
 export const recurringApi = {
-  /** POST /recurring — create a recurring rule. */
+  /** POST /recurring — create a rule. */
   create(body: CreateRecurringBody) {
     return authedRequest<RecurringRule>("/recurring", {
       method: "POST",
@@ -245,12 +254,12 @@ export const recurringApi = {
 
   /** GET /recurring — list all rules. */
   list() {
-    return authedCachedRequest<RecurringRule[]>("/recurring", ["recurring"]);
+    return authedRequest<RecurringRule[]>("/recurring");
   },
 
   /** GET /recurring/:id — single rule. */
   get(id: string) {
-    return authedCachedRequest<RecurringRule>(`/recurring/${id}`, ["recurring"]);
+    return authedRequest<RecurringRule>(`/recurring/${id}`);
   },
 
   /** PATCH /recurring/:id — edit a rule. */
@@ -261,24 +270,18 @@ export const recurringApi = {
     });
   },
 
-  /** POST /recurring/:id/pause — pause ACTIVE rule. */
+  /** POST /recurring/:id/pause */
   pause(id: string) {
-    return authedRequest<RecurringRule>(`/recurring/${id}/pause`, {
-      method: "POST",
-    });
+    return authedRequest<RecurringRule>(`/recurring/${id}/pause`, { method: "POST" });
   },
 
-  /** POST /recurring/:id/resume — resume PAUSED rule. */
+  /** POST /recurring/:id/resume */
   resume(id: string) {
-    return authedRequest<RecurringRule>(`/recurring/${id}/resume`, {
-      method: "POST",
-    });
+    return authedRequest<RecurringRule>(`/recurring/${id}/resume`, { method: "POST" });
   },
 
-  /** POST /recurring/:id/stop — permanently stop a rule. */
+  /** POST /recurring/:id/stop */
   stop(id: string) {
-    return authedRequest<RecurringRule>(`/recurring/${id}/stop`, {
-      method: "POST",
-    });
+    return authedRequest<RecurringRule>(`/recurring/${id}/stop`, { method: "POST" });
   },
 };
